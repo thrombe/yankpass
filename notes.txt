@@ -1,0 +1,12 @@
+
+. idea
+  . encrypt stuff on phon. send hash to pc. decrypt and paste it.
+    \. encrypt using some key(maybe cl argument, or su perms something-something) + time as salt
+    \. find better ways to save this key. like what do other apps do to store sensi stuff?
+  \. using same key on both sides (same salted hash func)
+  . maybe phone is main device here, ie push button on phone abd stuff gets pasted on pc
+  . can do something like, pc sends a public key (rpivate key can be big random no.) and phone locks it using that key. and sends the text to pc
+    which can decrypt it
+
+plan:
+  . if text goes too big, send files via discord
