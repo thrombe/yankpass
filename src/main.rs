@@ -4,9 +4,11 @@ mod discord;
 mod crypto;
 mod cli;
 
-use discord::test1;
-// use crypto::{};
+use structopt::StructOpt;
+
+use cli::Opt;
 
 fn main() {
-    test1();
+    let opt = Opt::from_args();
+    opt.sub.run().unwrap();
 }
