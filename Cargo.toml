@@ -11,4 +11,4 @@ openssl = "0.10" # apt install libssl-dev pkg-config openssl
 serenity = "0.10"
 structopt = "0.3"
 tokio = { version = "1", features = ["rt-multi-thread", "time"] }
-enigo = "0"
+enigo = "0" # pacman -S xdotool
