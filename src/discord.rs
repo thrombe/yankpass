@@ -58,7 +58,7 @@ struct Handler {
 }
 
 impl Handler {
-    async fn got_public_key(&self, strr: String, ctx: Context, message: Message) {
+    async fn got_public_key(&self, strr: String, ctx: &Context, message: Message) {
         let crypto_handler = CryptoHandler::new_from_public_key_pem(strr);
         loop {
             let pass = rpassword::prompt_password_stdout("enter password or q: ").unwrap();
@@ -101,7 +101,6 @@ impl Handler {
 impl EventHandler for Handler {
     // if receiver, send the private key
     async fn cache_ready(&self, ctx: Context, guilds: Vec<GuildId>) {
-        if !self.receiver {return}
         // find yankpass channel
         let mut yank_channel: Option<GuildChannel> = None;
         'loup: for guild_id in guilds {
@@ -114,22 +113,46 @@ impl EventHandler for Handler {
                 }
             }
         }
-        // send public key if channel found
+
         if let Some(channel) = yank_channel {
-            channel.say(&ctx, self.crypto_handler.as_ref().unwrap().public_key()).await.unwrap();
+            if self.receiver {
+                // send public key if receiver
+                channel.say(&ctx, self.crypto_handler.as_ref().unwrap().public_key()).await.unwrap();
+            } else {
+                println!("Listening for connection...");
+
+                // try get public key from message history if sender
+                let mut messages = ctx.http.get_messages(channel.id.0, "").await.unwrap();
+                messages.sort_by(|m1, m2| m1.timestamp.cmp(&m2.timestamp));
+                messages.reverse();
+                if messages.len() == 0 {
+                    return;
+                }
+                for m in messages { // 50 messages (when i checked)
+                    if m.timestamp.timestamp()+30 < std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64 {
+                        break;
+                    }
+                    if m.content.starts_with("-----BEGIN PUBLIC KEY-----") {
+                        println!("Found public key.");
+                        self.got_public_key(m.content.clone(), &ctx, m.clone()).await;
+                        self.reset_sleep();
+                        break;
+                    }
+                }
+            }
         } 
     }
 
-    // check who sent the message and whats in it
+    // check who sent the message and what's in it
     async fn message(&self, ctx: Context, new_message: Message) {
         if !new_message.author.bot {return}
         let start = "encrypted: ";
         if self.receiver && new_message.content.starts_with(start) {
             self.got_encrypted(new_message.content[start.len()..].into());
         } else if !self.receiver && new_message.content.starts_with("-----BEGIN PUBLIC KEY-----") {
-            self.got_public_key(new_message.content.clone(), ctx, new_message).await;
+            println!("Found public key.");
+            self.got_public_key(new_message.content.clone(), &ctx, new_message).await;
         } else {return}
-        // only reaches this if either of the first 2 conditions are correct
         self.reset_sleep();
     }
 }

@@ -2,8 +2,9 @@
 
 plan:
   . if text goes too big, send files via discord
-  . sender should ask for the public key if it dosent get it
-    . this way either can be started first
-    . maybe just check the history and see the last sent message for a private key
-      . do not forget to check for when it was sent
+    . or maybe send multiple messages?
+  \. sender should ask for the public key if it dosent get it
+    /. this way either can be started first
+    /. maybe just check the history and see the last sent message for a private key
+      /. do not forget to check for when it was sent
 
