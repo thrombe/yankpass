@@ -1,15 +1,16 @@
 [package]
 name = "yankpass"
 version = "0.1.0"
-edition = "2018"
+edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
 rpassword = "5.0"
-# openssl = "0.10" # apt install libssl-dev pkg-config openssl
-openssl = { version = "0.10", features = ["vendored"] } # use this for corss compilation (also compiles for non cross compilation)
+openssl = "0.10" # apt install libssl-dev pkg-config openssl
 serenity = "0.10"
 structopt = "0.3"
 tokio = { version = "1", features = ["rt-multi-thread", "time"] }
+
+[target.'cfg(target_arch = "x86_64")'.dependencies]
 enigo = "0" # pacman -S xdotool
