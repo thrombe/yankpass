@@ -1,6 +1,0 @@
-
-
-plan:
-  . if text goes too big, send files via discord
-    . or maybe send multiple messages?
-
