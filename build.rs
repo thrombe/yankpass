@@ -1,7 +1,7 @@
 
 
 fn main() {
-    cxx_build::bridge("src/main.rs")
+    cxx_build::bridges(vec!["src/main.rs"])
         .file("src/test.cc")
         // .cpp(true)
         .include("sdk/firebase_cpp_sdk/include")
@@ -18,7 +18,7 @@ fn main() {
         // .flag("-lglib-2.0")
         // .flag("-Lsdk/firebase_cpp_sdk/libs/linux/x86_64/legacy")
         // .flag_if_supported("-std=c++11")
-        .compile("demo");
+        .compile("yankpass");
 
     println!("cargo:rustc-flags=-Lsdk/firebase_cpp_sdk/libs/linux/x86_64/cxx11 -lfirebase_firestore -lfirebase_auth -lfirebase_app -lpthread -lsecret-1 -lgio-2.0 -lgobject-2.0 -lglib-2.0");
 

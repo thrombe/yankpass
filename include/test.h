@@ -1,13 +1,19 @@
 
 #pragma once
-#include "firebase/auth.h"
-#include "firebase/auth/user.h"
 #include "firebase/firestore.h"
 #include "firebase/util.h"
 #include <memory>
 
+#include "rust/cxx.h"
+// #include "yankpass/src/main.rs.h"
+#include "yankpass/src/bridge.rs.h"
+
+// struct UpdateDataContext;
+
 using firebase::App;
 using firebase::firestore::Firestore;
+
+using c_void = void;
 
 class Store {
 public:
@@ -18,8 +24,10 @@ public:
   ~Store();
 
   void drop();
-  void update_data(const char *);
+
+  void update_data(const char *, rust::Fn<void(void *ctx, const char *val)>,
+                   void *);
+  // void update_data(const char *);
 };
 
 std::unique_ptr<Store> create(const char *);
-void myap(const std::string &);

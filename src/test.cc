@@ -1,9 +1,7 @@
 
-#include <stdio.h>
-
-// #include "yankpass/include/test.h"
 #include "../include/test.h"
-// #include "include/test.h"
+
+#include <stdio.h>
 
 #include <algorithm>
 #include <cstdint>
@@ -12,10 +10,12 @@
 #include <string>
 #include <utility>
 
-#include "firebase/auth.h"
-#include "firebase/auth/user.h"
 #include "firebase/firestore.h"
 #include "firebase/util.h"
+
+#include "rust/cxx.h"
+// #include "yankpass/src/main.rs.h"
+#include "yankpass/src/bridge.rs.h"
 
 using namespace firebase::firestore;
 using firebase::App;
@@ -45,30 +45,21 @@ std::unique_ptr<Store> create(const char *config_json) {
   return store;
 }
 
-void Store::update_data(const char *obj_json) {
-  this->db->Collection("users").Document("root").Set(
-      {{"json", FieldValue::String(obj_json)}});
-}
+void Store::update_data(const char *obj_json,
+                        rust::Fn<void(void *ctx, const char *val)> done,
+                        void *ctx) {
+  // void Store::update_data(const char *obj_json) {
+  auto ref = this->db->Collection("users").Document("root");
 
-void myap(const std::string &config_str) {
-  auto conf = AppOptions::LoadFromJsonConfig(config_str.c_str(), nullptr);
-  auto app = App::Create(*conf);
-  InitResult result;
-  auto db = Firestore::GetInstance(app, &result);
+  auto fut = ref.Set({{"json", FieldValue::String(obj_json)}});
 
-  auto user_ref = db->Collection("users").Add({
-      {"first", FieldValue::String("Ada")},
-      {"last", FieldValue::String("Lovelace")},
-      {"born", FieldValue::Integer(1815)},
-  });
-
-  user_ref.OnCompletion([](const Future<DocumentReference> &future) {
+  fut.OnCompletion([done, ctx](const Future<void> &future) mutable {
     if (future.error() == Error::kErrorOk) {
-      std::cout << "DocumentSnapshot added with ID: " << future.result()->id()
-                << std::endl;
+      (*done)(ctx, "");
     } else {
-      std::cout << "Error adding document: " << future.error_message()
-                << std::endl;
+      auto str = future.error_message();
+      (*done)(ctx, str);
     }
   });
+  ;
 }
