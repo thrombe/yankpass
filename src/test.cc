@@ -55,7 +55,7 @@ void Store::update_data(const char *obj_json,
 
   fut.OnCompletion([done, ctx](const Future<void> &future) mutable {
     if (future.error() == Error::kErrorOk) {
-      (*done)(ctx, "");
+      (*done)(ctx, nullptr);
     } else {
       auto str = future.error_message();
       (*done)(ctx, str);

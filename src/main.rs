@@ -5,14 +5,12 @@
 // mod cli;
 
 use std::{
-    collections::HashSet,
     fs,
-    ops::Deref,
-    path::{Path, PathBuf}, ffi::{CString, c_void},
+    path::PathBuf, ffi::CString,
 };
 
 use anyhow::{Result, anyhow, Context};
-use cxx::{let_cxx_string, UniquePtr, CxxString};
+use cxx::UniquePtr;
 use serde::{Deserialize, Serialize};
 use clap::{Parser, Subcommand};
 
@@ -22,7 +20,7 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-pub struct UpdateDataContext(pub tokio::sync::oneshot::Sender<CString>);
+pub struct UpdateDataContext(pub tokio::sync::oneshot::Sender<Result<()>>);
 
 #[cxx::bridge]
 mod ffi {
@@ -31,8 +29,6 @@ mod ffi {
     }
     unsafe extern "C++" {
         include!("yankpass/include/test.h");
-
-        // type UpdateDataContext = crate::bridge::UpdateDataContext;
 
         type c_void;
 
@@ -68,27 +64,25 @@ impl Firebase {
     async fn update_data(&mut self, data: &UserData) -> Result<()> {
         let data = serde_json::to_string(&data)?;
         let cdata = std::ffi::CString::new(data)?;
-        let (tx, rx) = tokio::sync::oneshot::channel::<CString>();
+        let (tx, rx) = tokio::sync::oneshot::channel::<Result<()>>();
         let ptr = Box::leak(Box::new(UpdateDataContext(tx)));
-        dbg!(ptr as *const _ as *const ffi::c_void);
         unsafe {
             self.app.pin_mut()
                 .update_data(cdata.as_ptr(),
                 |ctx, val| {
-                        dbg!(ctx as *const _ as *const ffi::c_void);
-                        let mut b = Box::from_raw(ctx as *mut UpdateDataContext);
-                        let val = CString::from_raw(val as _);
-                        dbg!(&val);
-                        let v2 = val.clone();
-                        let _ = Box::leak(val.into_boxed_c_str());
-
-                    let _ = b.0.send(v2);
+                        let b = Box::from_raw(ctx as *mut UpdateDataContext);
+                        let val = val.as_ref();
+                        if let Some(v) = val {
+                            let st = std::ffi::CStr::from_ptr(v);
+                            let _ = b.0.send(Err(anyhow!(st.to_str().unwrap())));
+                        } else {
+                            let _ = b.0.send(Ok(()));
+                        }
                 },
                     ptr as *const _ as *mut ffi::c_void
             );
         }
-        let res = rx.await?;
-        dbg!(res.to_str());
+        rx.await??;
         Ok(())
     }
 }
@@ -168,7 +162,7 @@ impl Ctx {
                 .unwrap_or(Ok(config_dir))?
         };
 
-        let conf: Config = {
+        let _conf: Config = {
             let config_file_path = config_dir.join("config.toml");
             if config_file_path.exists() {
                 let contents = std::fs::read_to_string(config_file_path)?;
