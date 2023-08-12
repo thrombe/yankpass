@@ -4,12 +4,14 @@
 // mod crypto;
 // mod cli;
 
-use std::{ffi::CString, fs, path::PathBuf};
+use std::{ffi::CString, fs, path::PathBuf, time::Duration};
 
 use anyhow::{anyhow, Context, Result};
 use clap::{Parser, Subcommand};
 use cxx::UniquePtr;
+use rtoolbox::safe_string::SafeString;
 use serde::{Deserialize, Serialize};
+use tokio::sync::{mpsc::{UnboundedReceiver, UnboundedSender}, oneshot};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -17,7 +19,7 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-pub struct UpdateDataContext(pub tokio::sync::oneshot::Sender<Result<()>>);
+pub struct UpdateDataContext(pub oneshot::Sender<Result<()>>);
 
 #[cxx::bridge]
 mod ffi {
@@ -51,24 +53,32 @@ struct Firebase {
     _config_str: CString,
 
     app: UniquePtr<ffi::Store>,
-    rcv: tokio::sync::mpsc::UnboundedReceiver<Result<CString>>,
 }
 
 impl Firebase {
-    fn new(config_json: String) -> Result<Self> {
+    pub fn new(config_json: String) -> Result<Self> {
         let cjson = std::ffi::CString::new(config_json)?;
-        let mut app = unsafe { ffi::create(cjson.as_ptr()) };
+        let app = unsafe { ffi::create(cjson.as_ptr()) };
 
+        let fb = Self {
+            app,
+            _config_str: cjson,
+        };
+        Ok(fb)
+    }
+
+    // TODO: fix this with rust type magic :}
+    /// calling this multiple times will invalidate the other channels
+    pub fn set_listenet(&mut self) -> UnboundedReceiver<Result<CString>> {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<Result<CString>>();
         let ctx = Box::leak(Box::new(tx));
 
         unsafe {
-            app.pin_mut().set_listener(
+            self.app.pin_mut().set_listener(
                 |ctx_ptr: *mut ffi::c_void,
                  json: *const std::ffi::c_char,
                  errmsg: *const std::ffi::c_char| {
-                    let tx =
-                        Box::from_raw(ctx_ptr as *mut tokio::sync::mpsc::UnboundedSender<Result<CString>>);
+                    let tx = Box::from_raw(ctx_ptr as *mut UnboundedSender<Result<CString>>);
                     if let Some(json) = json.as_ref() {
                         let _ = tx.send(Ok(std::ffi::CStr::from_ptr(json).to_owned()));
                     } else if let Some(err) = errmsg.as_ref() {
@@ -82,20 +92,15 @@ impl Firebase {
                 },
                 ctx as *const _ as _,
             );
-        }
 
-        let fb = Self {
-            app,
-            _config_str: cjson,
-            rcv: rx,
-        };
-        Ok(fb)
+            rx
+        }
     }
 
-    async fn update_data(&mut self, data: &UserData) -> Result<()> {
+    pub async fn update_data(&mut self, data: &UserData) -> Result<()> {
         let data = serde_json::to_string(&data)?;
         let cdata = std::ffi::CString::new(data)?;
-        let (tx, rx) = tokio::sync::oneshot::channel::<Result<()>>();
+        let (tx, rx) = oneshot::channel::<Result<()>>();
         let ptr = Box::leak(Box::new(UpdateDataContext(tx)));
         unsafe {
             self.app.pin_mut().update_data(
@@ -116,6 +121,74 @@ impl Firebase {
         rx.await??;
         Ok(())
     }
+
+    #[cfg(target_arch="x86_64")]
+    pub async fn start_receiver(mut self) -> Result<()> {
+        let mut rx = self.set_listenet();
+
+        loop {
+            let timeout = tokio::time::timeout(Duration::from_secs(10), rx.recv());
+
+            tokio::select! {
+                // select panics if no patterns match. so it panics on None. which is fine
+                maybe_json = timeout => {
+                    match maybe_json {
+                        Ok(Some(json)) => {
+                            let userdata = serde_json::from_str::<UserData>(json?.to_str()?)?;
+                            dbg!(&userdata);
+
+                            use enigo::KeyboardControllable;
+                            enigo::Enigo::new().key_sequence_parse(&userdata.pass);
+                        },
+                        Ok(None) => {
+                            unreachable!();
+                        },
+                        Err(_) => {
+                            break;
+                        },
+                    }
+                },
+            }
+        }
+        Ok(())
+    }
+
+    pub async fn start_sender(mut self) -> Result<()> {
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<SafeString>();
+
+        tokio::task::spawn(async move {});
+        let thread = tokio::task::spawn_blocking(move || -> Result<()> {
+            loop {
+                let pass = rpassword::prompt_password("enter passwrod: ")?;
+                tx.send(SafeString::from_string(pass))?;
+            }
+        });
+        
+        loop {
+            let timeout = tokio::time::timeout(Duration::from_secs(10), rx.recv());
+
+            tokio::select! {
+                // select panics if no patterns match. so it panics on None. which is fine
+                maybe_p = timeout => {
+                    match maybe_p {
+                        Ok(Some(p)) => {
+                            self.update_data(&UserData { pass: p }).await?;
+                        },
+                        Ok(None) => {
+                            unreachable!();
+                        },
+                        Err(_) => {
+                            break;
+                        },
+                    }
+                },
+            }
+        }
+
+        thread.abort();
+        println!("\ninput timeout. -- press enter to continue --");
+        Ok(())
+    }
 }
 
 impl Drop for Firebase {
@@ -126,27 +199,27 @@ impl Drop for Firebase {
 
 #[derive(Serialize, Deserialize, Debug)]
 struct UserData {
-    string: String,
+    pass: SafeString,
 }
+
+
 
 async fn firebase_test() -> Result<()> {
     let json = std::fs::read_to_string("google-services.json")?;
-    let mut fb = Firebase::new(json)?;
+    let fb = Firebase::new(json)?;
 
-    fb.update_data(&UserData {
-        string: "lamo take this".into(),
-    })
-    .await?;
+    let cli = Cli::parse();
 
-    loop {
-        tokio::select! {
-            // select panics if no patterns match. so it panics on None. which is fine
-            Some(json) = fb.rcv.recv() => {
-                let userdata = serde_json::from_str::<UserData>(json?.to_str()?)?;
-                dbg!(&userdata);
-            },
-        }
+    match cli.command {
+        Command::Send => {
+            fb.start_sender().await?;
+        },
+        Command::Receive => {
+            fb.start_receiver().await?;
+        },
     }
+
+    Ok(())
 }
 
 #[derive(Parser, Debug)]
@@ -162,11 +235,8 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Command {
-    /// Add paths to the current profile
-    Add {
-        #[clap(required = true)]
-        src: Vec<String>,
-    },
+    Send,
+    Receive,
 }
 
 #[derive(Deserialize, Debug)]
