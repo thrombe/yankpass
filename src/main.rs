@@ -1,23 +1,18 @@
-#![allow(dead_code)]
+use std::{ffi::CString, fs, io::Write, path::PathBuf, time::Duration};
 
-// mod discord;
-// mod crypto;
-// mod cli;
-
-use std::{ffi::CString, fs, path::PathBuf, time::Duration};
-
+use aes_gcm::{
+    aead::{Aead, OsRng},
+    AeadCore, Aes256Gcm, KeyInit,
+};
 use anyhow::{anyhow, Context, Result};
 use clap::{Parser, Subcommand};
 use cxx::UniquePtr;
 use rtoolbox::safe_string::SafeString;
 use serde::{Deserialize, Serialize};
-use tokio::sync::{mpsc::{UnboundedReceiver, UnboundedSender}, oneshot};
-
-#[tokio::main]
-async fn main() -> Result<()> {
-    firebase_test().await?;
-    Ok(())
-}
+use tokio::sync::{
+    mpsc::{UnboundedReceiver, UnboundedSender},
+    oneshot,
+};
 
 pub struct UpdateDataContext(pub oneshot::Sender<Result<()>>);
 
@@ -69,7 +64,7 @@ impl Firebase {
 
     // TODO: fix this with rust type magic :}
     /// calling this multiple times will invalidate the other channels
-    pub fn set_listenet(&mut self) -> UnboundedReceiver<Result<CString>> {
+    pub fn set_listener(&mut self) -> UnboundedReceiver<Result<CString>> {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<Result<CString>>();
         let ctx = Box::leak(Box::new(tx));
 
@@ -122,9 +117,9 @@ impl Firebase {
         Ok(())
     }
 
-    #[cfg(target_arch="x86_64")]
-    pub async fn start_receiver(mut self) -> Result<()> {
-        let mut rx = self.set_listenet();
+    #[cfg(target_arch = "x86_64")]
+    pub async fn start_receiver(mut self, cipher: Aes256Gcm) -> Result<()> {
+        let mut rx = self.set_listener();
 
         loop {
             let timeout = tokio::time::timeout(Duration::from_secs(10), rx.recv());
@@ -137,8 +132,11 @@ impl Firebase {
                             let userdata = serde_json::from_str::<UserData>(json?.to_str()?)?;
                             dbg!(&userdata);
 
+                            let nonce = aes_gcm::Nonce::<<aes_gcm::Aes256Gcm as aes_gcm::AeadCore>::NonceSize>::from_slice(&userdata.nonce);
+                            let plaintext = cipher.decrypt(nonce, &userdata.ciphertext[..]).ok().context("failed to decrypt")?;
+
                             use enigo::KeyboardControllable;
-                            enigo::Enigo::new().key_sequence_parse(&userdata.pass);
+                            enigo::Enigo::new().key_sequence_parse(String::from_utf8(plaintext)?.as_ref());
                         },
                         Ok(None) => {
                             unreachable!();
@@ -153,7 +151,7 @@ impl Firebase {
         Ok(())
     }
 
-    pub async fn start_sender(mut self) -> Result<()> {
+    pub async fn start_sender(mut self, cipher: Aes256Gcm) -> Result<()> {
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<SafeString>();
 
         tokio::task::spawn(async move {});
@@ -163,7 +161,7 @@ impl Firebase {
                 tx.send(SafeString::from_string(pass))?;
             }
         });
-        
+
         loop {
             let timeout = tokio::time::timeout(Duration::from_secs(10), rx.recv());
 
@@ -172,7 +170,12 @@ impl Firebase {
                 maybe_p = timeout => {
                     match maybe_p {
                         Ok(Some(p)) => {
-                            self.update_data(&UserData { pass: p }).await?;
+                            let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
+                            let ciphertext = cipher.encrypt(&nonce, p.as_bytes()).ok().context("failed to encrypt")?;
+                            self.update_data(&UserData {
+                                ciphertext: ciphertext.into_boxed_slice(),
+                                nonce: nonce.to_vec().into_boxed_slice(),
+                            }).await?;
                         },
                         Ok(None) => {
                             unreachable!();
@@ -199,27 +202,8 @@ impl Drop for Firebase {
 
 #[derive(Serialize, Deserialize, Debug)]
 struct UserData {
-    pass: SafeString,
-}
-
-
-
-async fn firebase_test() -> Result<()> {
-    let json = std::fs::read_to_string("google-services.json")?;
-    let fb = Firebase::new(json)?;
-
-    let cli = Cli::parse();
-
-    match cli.command {
-        Command::Send => {
-            fb.start_sender().await?;
-        },
-        Command::Receive => {
-            fb.start_receiver().await?;
-        },
-    }
-
-    Ok(())
+    ciphertext: Box<[u8]>,
+    nonce: Box<[u8]>,
 }
 
 #[derive(Parser, Debug)]
@@ -237,14 +221,17 @@ struct Cli {
 enum Command {
     Send,
     Receive,
+    NewKey { output_file: PathBuf },
 }
 
 #[derive(Deserialize, Debug)]
-struct Config {}
+struct Config {
+    username: String,
+    firebase_json_path: PathBuf,
+    key_path: PathBuf,
+}
 
-struct Ctx {}
-
-impl Ctx {
+impl Config {
     fn new(cli: &Cli) -> Result<Self> {
         let config_dir = {
             let config_dir = dirs::config_dir()
@@ -264,7 +251,7 @@ impl Ctx {
                 .unwrap_or(Ok(config_dir))?
         };
 
-        let _conf: Config = {
+        let conf: Config = {
             let config_file_path = config_dir.join("config.toml");
             if config_file_path.exists() {
                 let contents = std::fs::read_to_string(config_file_path)?;
@@ -274,6 +261,74 @@ impl Ctx {
             }
         };
 
-        Ok(Self {})
+        Ok(conf)
     }
+
+    /*
+    fn get_private_key(&self) -> Result<rsa::RsaPrivateKey> {
+        let Some(p) = self.private_key_path.as_ref() else {
+            return Err(anyhow!("No private key file path in config"));
+        };
+        if !p.exists() {
+            return Err(anyhow!("Private Key file does not exist."));
+        }
+
+        let private = fs::read_to_string(p)?;
+
+        let private: rsa::RsaPrivateKey = serde_json::from_str(&private)?;
+        Ok(private)
+    }
+
+    fn get_public_key(&self) -> Result<rsa::RsaPublicKey> {
+        let Some(p) = self.public_key_path.as_ref().or(self.private_key_path.as_ref()) else {
+            return Err(anyhow!("No public or private key file path in config"));
+        };
+        if !p.exists() {
+            return Err(anyhow!("Key file does not exist."));
+        }
+
+        let public = fs::read_to_string(p)?;
+
+        let public: rsa::RsaPublicKey = serde_json::from_str(&public)?;
+        Ok(public)
+    }
+    */
+}
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    let cli = Cli::parse();
+
+    if let Command::NewKey { output_file } = &cli.command {
+        if output_file.exists() {
+            return Err(anyhow!("a file already exists at {:?}", output_file));
+        }
+
+        let key = Aes256Gcm::generate_key(OsRng);
+        let slice = key.as_slice();
+
+        fs::File::create(output_file)?.write(slice)?;
+        return Ok(());
+    }
+
+    let conf = Config::new(&cli)?;
+
+    let json = std::fs::read_to_string("google-services.json")?;
+    let fb = Firebase::new(json)?;
+
+    let key_vec = fs::read(&conf.key_path).unwrap();
+    let key = aes_gcm::Key::<Aes256Gcm>::from_slice(key_vec.as_slice());
+    let cipher = Aes256Gcm::new(key);
+
+    match &cli.command {
+        Command::Send => {
+            fb.start_sender(cipher).await?;
+        }
+        Command::Receive => {
+            fb.start_receiver(cipher).await?;
+        }
+        _ => unreachable!(),
+    }
+
+    Ok(())
 }
