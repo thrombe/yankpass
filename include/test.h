@@ -27,7 +27,9 @@ public:
 
   void update_data(const char *, rust::Fn<void(void *ctx, const char *val)>,
                    void *);
-  // void update_data(const char *);
+  void
+  set_listener(rust::Fn<void(void *ctx, const char *json, const char *err)>,
+               void *);
 };
 
 std::unique_ptr<Store> create(const char *);

@@ -61,5 +61,24 @@ void Store::update_data(const char *obj_json,
       (*done)(ctx, str);
     }
   });
-  ;
+}
+
+void Store::set_listener(
+    rust::Fn<void(void *ctx, const char *json, const char *err)> callb,
+    void *ctx) {
+  auto docref = this->db->Collection("users").Document("root");
+  docref.AddSnapshotListener([callb, ctx](const DocumentSnapshot &snapshot,
+                                          Error error,
+                                          const std::string &errmsg) {
+    if (error == Error::kErrorOk) {
+      if (snapshot.exists()) {
+        auto json = snapshot.Get("json").string_value();
+        (*callb)(ctx, json.c_str(), nullptr);
+      } else {
+        std::cout << "json does not exists" << std::endl;
+      }
+    } else {
+      (*callb)(ctx, nullptr, errmsg.c_str());
+    }
+  });
 }
