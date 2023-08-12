@@ -202,6 +202,7 @@ impl Drop for Firebase {
 
 #[derive(Serialize, Deserialize, Debug)]
 struct UserData {
+    // TODO: these are serialized very inefficiently
     ciphertext: Box<[u8]>,
     nonce: Box<[u8]>,
 }
@@ -221,14 +222,14 @@ struct Cli {
 enum Command {
     Send,
     Receive,
-    NewKey { output_file: PathBuf },
+    NewKey { output_file: String },
 }
 
 #[derive(Deserialize, Debug)]
 struct Config {
     username: String,
-    firebase_json_path: PathBuf,
-    key_path: PathBuf,
+    firebase_json_path: String,
+    key_path: String,
 }
 
 impl Config {
@@ -263,36 +264,6 @@ impl Config {
 
         Ok(conf)
     }
-
-    /*
-    fn get_private_key(&self) -> Result<rsa::RsaPrivateKey> {
-        let Some(p) = self.private_key_path.as_ref() else {
-            return Err(anyhow!("No private key file path in config"));
-        };
-        if !p.exists() {
-            return Err(anyhow!("Private Key file does not exist."));
-        }
-
-        let private = fs::read_to_string(p)?;
-
-        let private: rsa::RsaPrivateKey = serde_json::from_str(&private)?;
-        Ok(private)
-    }
-
-    fn get_public_key(&self) -> Result<rsa::RsaPublicKey> {
-        let Some(p) = self.public_key_path.as_ref().or(self.private_key_path.as_ref()) else {
-            return Err(anyhow!("No public or private key file path in config"));
-        };
-        if !p.exists() {
-            return Err(anyhow!("Key file does not exist."));
-        }
-
-        let public = fs::read_to_string(p)?;
-
-        let public: rsa::RsaPublicKey = serde_json::from_str(&public)?;
-        Ok(public)
-    }
-    */
 }
 
 #[tokio::main]
@@ -300,6 +271,10 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     if let Command::NewKey { output_file } = &cli.command {
+        let output_file = {
+            let tilde = shellexpand::tilde(&output_file).to_string();
+            PathBuf::from(tilde)
+        };
         if output_file.exists() {
             return Err(anyhow!("a file already exists at {:?}", output_file));
         }
@@ -307,16 +282,16 @@ async fn main() -> Result<()> {
         let key = Aes256Gcm::generate_key(OsRng);
         let slice = key.as_slice();
 
-        fs::File::create(output_file)?.write(slice)?;
+        fs::File::create(output_file)?.write_all(slice)?;
         return Ok(());
     }
 
     let conf = Config::new(&cli)?;
 
-    let json = std::fs::read_to_string("google-services.json")?;
+    let json = std::fs::read_to_string(shellexpand::tilde(&conf.firebase_json_path).as_ref())?;
     let fb = Firebase::new(json)?;
 
-    let key_vec = fs::read(&conf.key_path).unwrap();
+    let key_vec = fs::read(shellexpand::tilde(&conf.key_path).as_ref()).unwrap();
     let key = aes_gcm::Key::<Aes256Gcm>::from_slice(key_vec.as_slice());
     let cipher = Aes256Gcm::new(key);
 
