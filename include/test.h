@@ -5,10 +5,6 @@
 #include <memory>
 
 #include "rust/cxx.h"
-// #include "yankpass/src/main.rs.h"
-#include "yankpass/src/bridge.rs.h"
-
-// struct UpdateDataContext;
 
 using firebase::App;
 using firebase::firestore::Firestore;

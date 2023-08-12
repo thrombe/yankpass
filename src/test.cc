@@ -14,8 +14,6 @@
 #include "firebase/util.h"
 
 #include "rust/cxx.h"
-// #include "yankpass/src/main.rs.h"
-#include "yankpass/src/bridge.rs.h"
 
 using namespace firebase::firestore;
 using firebase::App;
