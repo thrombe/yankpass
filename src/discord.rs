@@ -21,6 +21,7 @@ use structopt::StructOpt;
 use std::sync::{Arc, Mutex};
 #[cfg(target_arch="x86_64")]
 use enigo::{self, KeyboardControllable};
+use std::process::Command;
 
 use super::crypto::CryptoHandler;
 
@@ -89,7 +90,29 @@ impl Handler {
         #[cfg(debug_assertions)]
         dbg!(&password);
         #[cfg(target_arch="x86_64")]
-        enigo::Enigo::new().key_sequence_parse(&password);
+        {
+            #[cfg(not(target_os="linux"))]
+            enigo::Enigo::new().key_sequence_parse(&password);
+
+            #[cfg(target_os="linux")]
+            {
+                // - [Wayland or X11](https://unix.stackexchange.com/questions/202891/how-to-know-whether-wayland-or-x11-is-being-used)
+                let mut c = Command::new("sh");
+                c.arg("-c")
+                    .arg("loginctl show-session $(loginctl | grep \"$USER\" | awk '{print $1}') -p Type");
+                let o = c.output().unwrap();
+                let s = std::str::from_utf8(&o.stdout).unwrap();
+
+                if s.contains("x11") {
+                    enigo::Enigo::new().key_sequence_parse(&password);
+                }
+                if s.contains("wayland") {
+                    let mut c = Command::new("wtype");
+                    c.arg(&password);
+                    _ = c.output();
+                }
+            }
+        }
     }
 
     fn reset_sleep(&self) {
