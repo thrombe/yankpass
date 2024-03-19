@@ -28,10 +28,10 @@
         buildInputs = with pkgs; [
           openssl
           xdotool
+          wtype
         ];
         nativeBuildInputs = with pkgs; [
           pkg-config
-          wtype
         ];
       };
 
